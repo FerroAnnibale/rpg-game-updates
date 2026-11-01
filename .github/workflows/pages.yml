@@ -31,16 +31,32 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           mkdir -p "$RUNNER_TEMP/game-site" site
-          if [ -n "$RELEASE_TAG" ]; then
-            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern game-site.zip --dir "$RUNNER_TEMP/game-site"
+          download_release_asset() {
+            if [ -n "$RELEASE_TAG" ]; then
+              gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$1" --dir "$RUNNER_TEMP/game-site"
+            else
+              gh release download --repo "$GITHUB_REPOSITORY" --pattern "$1" --dir "$RUNNER_TEMP/game-site"
+            fi
+          }
+          if download_release_asset game-site.zip; then
+            :
           else
-            gh release download --repo "$GITHUB_REPOSITORY" --pattern game-site.zip --dir "$RUNNER_TEMP/game-site"
+            download_release_asset 'game-site.zip.part*'
+            archive="$RUNNER_TEMP/game-site/game-site.zip"
+            : > "$archive"
+            for part in "$RUNNER_TEMP/game-site"/game-site.zip.part*; do
+              if [ ! -f "$part" ]; then
+                echo "No game-site.zip or split game-site archive assets found." >&2
+                exit 1
+              fi
+              cat "$part" >> "$archive"
+            done
           fi
           echo "Release archive SHA-256: $(sha256sum "$RUNNER_TEMP/game-site/game-site.zip" | cut -d ' ' -f 1)"
           unzip -q "$RUNNER_TEMP/game-site/game-site.zip" -d site
           VERSION=$(python -c 'import json; print(json.load(open("site/update-manifest.json"))["version"])')
           echo "Publishing game version ${VERSION} from release tag ${RELEASE_TAG:-latest}"
-          sed -E -i "s#src=\"js/plugins\\.js(\\?v=[^\"]*)?\"#src=\"js/plugins.js?v=${VERSION}\"#" site/index.html
+          sed -E -i 's#src="js/plugins\.js(\?v=[^"]*)?"#src="js/plugins.js?v='"$VERSION"'"#' site/index.html
           python -c 'import hashlib, json, pathlib; root=pathlib.Path("site"); manifest_path=root/"update-manifest.json"; manifest=json.loads(manifest_path.read_text(encoding="utf-8")); content=(root/"index.html").read_bytes(); entry=next(item for item in manifest["files"] if item["path"]=="index.html"); entry["size"]=len(content); entry["sha256"]=hashlib.sha256(content).hexdigest(); manifest_path.write_text(json.dumps(manifest, indent=2)+"\n", encoding="utf-8")'
           test -f site/index.html
           test -f site/update-manifest.json
